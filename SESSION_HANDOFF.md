@@ -36,7 +36,7 @@
 - [x] **`scripts/keyboard_mouse/keyboard_action.py`**: Acciones de teclado (`typewrite`, `press`, `hotkey` combinados) con bandera `--no-failsafe`.
 - [x] **`requirements.txt`**: Dependencias base (PyAutoGUI, OpenCV, PyTesseract, Pillow, WinOCR, NumPy, Playwright, Selenium, BeautifulSoup4, Requests).
 - [x] **`start_n8n.bat`**: Lanzador para Windows con permisos completos para `Execute Command` y acceso a rutas locales.
-- [x] **`workflows/quimitronica_ocr_click.json`**: Flujo para n8n con la secuencia: (1) Abrir navegador -> (2) Esperar 5s -> (3) OCR Click en "productos" con trayectoria A* -> (4) Parseo JSON.
+- [x] **`workflows/quimitronica_ocr_click.json`**: Flujo para n8n configurado con: (1) Abrir navegador -> (2) Esperar 5s -> (3) OCR Click con trayectoria A* y suavizado por B-Splines (`--spline-points 60 --step-delay 0.008`) -> (4) Parseo JSON.
 - [x] Estructura de carpetas modular (`browser`, `ocr_vision`, `keyboard_mouse`, `routines`, `workflows`).
 
 ---
