@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-RPA_TASK: Click Image OCR with A* Pathfinding and Spline Mouse Smoothing
+RPA_TASK: Click Image OCR with Ultra-Smooth Spline Movement
 CATEGORY: ocr_vision
 DESCRIPTION:
     Captura la pantalla, busca un texto mediante OCR nativo de Windows (winocr),
-    obtiene la posición actual del cursor (Punto A) y la coordenada destino (Punto B).
-    Construye un mapa de costos a partir de los valores de píxeles, calcula la ruta óptima
-    con A*, interpola la trayectoria utilizando Splines cúbicos (B-Splines) para un movimiento
-    del mouse suave y continuo, y ejecuta el clic al llegar.
+    obtiene la posición del cursor (Punto A) y la coordenada destino (Punto B).
+    Construye un mapa de pesos por píxeles, calcula la ruta óptima con A*, genera una
+    trayectoria continua mediante B-Splines cúbicos y traslada el cursor a 120 FPS
+    mediante llamadas directas a la API nativa de Windows (user32.SetCursorPos o mouse_event),
+    eliminando cualquier retardo artificial o movimiento a saltos.
 
 INPUTS:
     - --text (str, obligatorio): Palabra o frase a buscar en pantalla (ej. 'productos').
     - --lang (str, opcional): Idioma para OCR (default: 'en-US').
     - --clicks (int, opcional): Número de clics a realizar (default: 1).
+    - --duration (float, opcional): Tiempo total en segundos para recorrer la trayectoria (default: 1.2).
+    - --fps (int, opcional): Tasa de refresco de coordenadas para fluidez máxima (default: 120).
     - --use-astar (bool, opcional): Habilitar la trayectoria A* (default: True).
-    - --use-splines (bool, opcional): Suavizar la trayectoria mediante splines (default: True).
     - --grid-scale (int, opcional): Factor de reducción para A* (default: 8).
-    - --spline-points (int, opcional): Número de puntos interpolados en la curva spline (default: 60).
-    - --step-delay (float, opcional): Retardo en segundos entre pasos del spline (default: 0.008).
     - --no-failsafe (bool, opcional): Desactiva fail-safe de esquinas en pyautogui (default: False).
     - --json-input (str, opcional): Payload JSON con parámetros.
 
@@ -27,11 +27,11 @@ OUTPUTS:
     - start_coordinates (dict): Coordenada inicial {x, y} del cursor.
     - target_coordinates (dict): Coordenada destino {x, y} detectada por OCR.
     - astar_nodes_count (int): Cantidad de nodos generados por A*.
-    - spline_points_count (int): Cantidad de puntos generados en la curva spline.
+    - spline_frames_count (int): Cantidad de cuadros de movimiento ejecutados a alta frecuencia.
     - bbox (dict): Caja delimitadora {x, y, width, height} del elemento reconocido.
 
 EXIT CODES:
-    - 0: Trayectoria spline y clic ejecutados con éxito.
+    - 0: Trayectoria ultra-fluida y clic ejecutados con éxito.
     - 1: No se localizó el texto en pantalla o falló el reconocimiento.
 """
 
@@ -40,12 +40,19 @@ import json
 import time
 import math
 import heapq
+import ctypes
 import asyncio
 import argparse
 import logging
 from typing import Dict, Any, List, Tuple
 
 import numpy as np
+
+# API de Windows para movimiento de cursor sin lag
+try:
+    user32 = ctypes.windll.user32
+except Exception:
+    user32 = None
 
 try:
     from scipy.interpolate import splprep, splev
@@ -55,6 +62,7 @@ except ImportError:
 
 try:
     import pyautogui
+    pyautogui.PAUSE = 0.0  # Desactivar delay automático de pyautogui (default es 0.1s)
 except ImportError:
     pyautogui = None
 
@@ -76,10 +84,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def set_native_cursor_pos(x: int, y: int):
+    """Mueve el cursor instantáneamente a través de la API nativa de Windows."""
+    if user32 is not None:
+        user32.SetCursorPos(int(x), int(y))
+    elif pyautogui is not None:
+        pyautogui.moveTo(int(x), int(y))
+
+
 def compute_cost_grid(screenshot_np: np.ndarray, scale: int) -> np.ndarray:
-    """
-    Construye una matriz de costos reducida basada en luminancia.
-    """
+    """Construye matriz de costos reducida basada en luminancia."""
     if screenshot_np.ndim == 3:
         gray = 0.2989 * screenshot_np[:, :, 0] + 0.5870 * screenshot_np[:, :, 1] + 0.1140 * screenshot_np[:, :, 2]
     else:
@@ -96,9 +110,7 @@ def compute_cost_grid(screenshot_np: np.ndarray, scale: int) -> np.ndarray:
 
 
 def a_star_search(cost_grid: np.ndarray, start: Tuple[int, int], goal: Tuple[int, int]) -> List[Tuple[int, int]]:
-    """
-    Algoritmo A* estándar sobre grilla 2D.
-    """
+    """Algoritmo A* estándar sobre grilla 2D."""
     rows, cols = cost_grid.shape
     start_node = (max(0, min(cols - 1, start[0])), max(0, min(rows - 1, start[1])))
     goal_node = (max(0, min(cols - 1, goal[0])), max(0, min(rows - 1, goal[1])))
@@ -147,67 +159,78 @@ def a_star_search(cost_grid: np.ndarray, start: Tuple[int, int], goal: Tuple[int
     return [start_node, goal_node]
 
 
-def generate_spline_path(
+def build_spline_interpolator(
     astar_path: List[Tuple[int, int]],
     scale: int,
     start_point: Tuple[int, int],
-    target_point: Tuple[int, int],
-    num_spline_points: int = 60
-) -> List[Tuple[float, float]]:
+    target_point: Tuple[int, int]
+):
     """
-    Ajusta una curva B-Spline a través de los nodos clave de A* para generar
-    un recorrido fluido y orgánico del cursor.
+    Construye la función paramétrica continua B-Spline que describe toda la trayectoria.
     """
-    # Escalar los puntos de A* a resolución de pantalla completa
     full_scale_points = [(p[0] * scale, p[1] * scale) for p in astar_path]
 
-    # Asegurar que el punto inicial y final exactos estén presentes
     control_points = [start_point]
-    
-    # Submuestrear puntos intermedios de A* para que actúen como puntos de control del spline
     stride = max(1, len(full_scale_points) // 8)
     for pt in full_scale_points[::stride]:
         if pt != start_point and pt != target_point:
             control_points.append(pt)
     control_points.append(target_point)
 
-    # Eliminar puntos duplicados consecutivos
     filtered_points = [control_points[0]]
     for pt in control_points[1:]:
         if math.hypot(pt[0] - filtered_points[-1][0], pt[1] - filtered_points[-1][1]) > 2.0:
             filtered_points.append(pt)
 
-    # Si hay muy pocos puntos para un B-Spline de grado 3 (se requieren al menos 4)
     if len(filtered_points) < 4 or splprep is None:
-        # Interpolación lineal como fallback
-        t = np.linspace(0, 1, num_spline_points)
-        x_lin = np.interp(t, np.linspace(0, 1, len(filtered_points)), [p[0] for p in filtered_points])
-        y_lin = np.interp(t, np.linspace(0, 1, len(filtered_points)), [p[1] for p in filtered_points])
-        return list(zip(x_lin, y_lin))
+        def linear_interp(u):
+            x = (1 - u) * start_point[0] + u * target_point[0]
+            y = (1 - u) * start_point[1] + u * target_point[1]
+            return x, y
+        return linear_interp
 
     x_vals = [float(p[0]) for p in filtered_points]
     y_vals = [float(p[1]) for p in filtered_points]
-
-    # Grado de la curva (k=3 para curva cúbica, o k=2 si hay 3 puntos)
     k = min(3, len(filtered_points) - 1)
-    # Factor de suavizado s (smooth)
     tck, _ = splprep([x_vals, y_vals], s=len(filtered_points) * 2.0, k=k)
-    u_fine = np.linspace(0, 1, num_spline_points)
-    spline_x, spline_y = splev(u_fine, tck)
 
-    return list(zip(spline_x, spline_y))
+    def spline_interp(u):
+        out_x, out_y = splev(u, tck)
+        return float(out_x), float(out_y)
+
+    return spline_interp
 
 
-def move_mouse_spline(spline_points: List[Tuple[float, float]], target_point: Tuple[int, int], step_delay: float):
+def execute_high_precision_movement(spline_evaluator, target_point: Tuple[int, int], duration: float, fps: int) -> int:
     """
-    Desplaza el cursor a través de cada punto del spline con retardo controlado.
+    Ejecuta el desplazamiento a alta tasa de cuadros (ej. 120 FPS) con curva de aceleración
+    y desaceleración natural (ease-in-out sinusoidal), sin pausas artificiales.
     """
-    for x, y in spline_points:
-        pyautogui.moveTo(int(round(x)), int(round(y)))
-        time.sleep(step_delay)
+    total_frames = max(10, int(duration * fps))
+    frame_interval = 1.0 / fps
+    start_time = time.perf_counter()
 
-    # Fijar exactamente en el target final
-    pyautogui.moveTo(target_point[0], target_point[1])
+    for i in range(total_frames):
+        target_frame_time = start_time + (i * frame_interval)
+        
+        # Parámetro normalizado [0, 1]
+        progress = i / (total_frames - 1)
+        
+        # Curva de animación suave (ease-in-out sinusoidal)
+        eased_u = 0.5 * (1.0 - math.cos(progress * math.pi))
+        
+        curr_x, curr_y = spline_evaluator(eased_u)
+        set_native_cursor_pos(round(curr_x), round(curr_y))
+
+        # Sincronización precisa de tiempo
+        now = time.perf_counter()
+        sleep_time = target_frame_time + frame_interval - now
+        if sleep_time > 0.001:
+            time.sleep(sleep_time)
+
+    # Posicionamiento final exacto en el objetivo
+    set_native_cursor_pos(target_point[0], target_point[1])
+    return total_frames
 
 
 async def find_text_coordinates_windows_ocr(screenshot, target_text: str, lang: str):
@@ -252,11 +275,10 @@ def execute_task(params: Dict[str, Any]) -> Dict[str, Any]:
     target_text = params.get("text")
     lang = params.get("lang", "en-US")
     clicks = int(params.get("clicks", 1))
+    duration = float(params.get("duration", 1.2))
+    fps = int(params.get("fps", 120))
     use_astar = bool(params.get("use_astar", True))
-    use_splines = bool(params.get("use_splines", True))
     grid_scale = int(params.get("grid_scale", 8))
-    spline_points_count = int(params.get("spline_points", 60))
-    step_delay = float(params.get("step_delay", 0.008))
     no_failsafe = bool(params.get("no_failsafe", False))
 
     if not target_text:
@@ -283,7 +305,7 @@ def execute_task(params: Dict[str, Any]) -> Dict[str, Any]:
     logger.info(f"Objetivo OCR localizado (Punto B) en ({target_x}, {target_y}).")
 
     astar_nodes_len = 0
-    final_spline_len = 0
+    total_frames = 0
 
     if use_astar:
         logger.info(f"Generando mapa de costos de píxeles (escala 1:{grid_scale})...")
@@ -296,25 +318,21 @@ def execute_task(params: Dict[str, Any]) -> Dict[str, Any]:
         astar_path = a_star_search(cost_grid, start_grid, goal_grid)
         astar_nodes_len = len(astar_path)
 
-        if use_splines:
-            logger.info(f"Ajustando curva B-Spline sobre los nodos de A* ({spline_points_count} pasos)...")
-            spline_path = generate_spline_path(
-                astar_path=astar_path,
-                scale=grid_scale,
-                start_point=(start_x, start_y),
-                target_point=(target_x, target_y),
-                num_spline_points=spline_points_count
-            )
-            final_spline_len = len(spline_path)
-            logger.info("Desplazando el cursor suavemente a lo largo del Spline...")
-            move_mouse_spline(spline_path, (target_x, target_y), step_delay)
-        else:
-            logger.info("Splines deshabilitados. Moviendo por nodos directos de A*...")
-            step_stride = max(1, len(astar_path) // 30)
-            for pt in astar_path[::step_stride]:
-                pyautogui.moveTo(pt[0] * grid_scale, pt[1] * grid_scale)
-                time.sleep(0.01)
-            pyautogui.moveTo(target_x, target_y)
+        logger.info(f"Ajustando spline continuo sobre {astar_nodes_len} nodos de A*...")
+        spline_evaluator = build_spline_interpolator(
+            astar_path=astar_path,
+            scale=grid_scale,
+            start_point=(start_x, start_y),
+            target_point=(target_x, target_y)
+        )
+
+        logger.info(f"Ejecutando desplazamiento ultra-suave a {fps} FPS (duración {duration}s)...")
+        total_frames = execute_high_precision_movement(
+            spline_evaluator,
+            (target_x, target_y),
+            duration,
+            fps
+        )
     else:
         logger.info("A* deshabilitado. Moviendo cursor directamente...")
         pyautogui.moveTo(target_x, target_y, duration=0.3)
@@ -328,24 +346,23 @@ def execute_task(params: Dict[str, Any]) -> Dict[str, Any]:
         "start_coordinates": {"x": start_x, "y": start_y},
         "target_coordinates": click_coords,
         "astar_nodes_count": astar_nodes_len,
-        "spline_points_count": final_spline_len,
+        "spline_frames_count": total_frames,
         "bbox": ocr_result["bbox"],
-        "message": f"Navegación Spline/A* completada y clic efectuado sobre '{ocr_result['matched_text']}'"
+        "message": f"Navegación ultra-fluida A* Spline completada y clic ejecutado sobre '{ocr_result['matched_text']}'"
     }
 
 
 def main():
     start_time = time.time()
-    parser = argparse.ArgumentParser(description="OCR + A* Pathfinding + B-Spline Mouse Movement.")
+    parser = argparse.ArgumentParser(description="OCR + A* Pathfinding + Ultra-Smooth 120FPS B-Spline Mouse Movement.")
     parser.add_argument("--text", type=str, required=False, help="Texto a buscar con OCR")
     parser.add_argument("--lang", type=str, default="en-US", help="Idioma OCR (default: en-US)")
     parser.add_argument("--clicks", type=int, default=1, help="Número de clics")
+    parser.add_argument("--duration", type=float, default=1.2, help="Duración total del recorrido en segundos (default: 1.2)")
+    parser.add_argument("--fps", type=int, default=120, help="Tasa de refresco del movimiento en cuadros por segundo (default: 120)")
     parser.add_argument("--no-astar", dest="use_astar", action="store_false", help="Desactiva A*")
-    parser.add_argument("--no-splines", dest="use_splines", action="store_false", help="Desactiva interpolación por splines")
-    parser.set_defaults(use_astar=True, use_splines=True)
+    parser.set_defaults(use_astar=True)
     parser.add_argument("--grid-scale", type=int, default=8, help="Escala de grilla A* (default: 8)")
-    parser.add_argument("--spline-points", type=int, default=60, help="Puntos de la curva spline (default: 60)")
-    parser.add_argument("--step-delay", type=float, default=0.008, help="Retardo por punto spline en segundos (default: 0.008)")
     parser.add_argument("--no-failsafe", action="store_true", help="Desactiva failsafe en esquinas de pantalla")
     parser.add_argument("--json-input", type=str, default=None, help="Payload JSON con parámetros")
 

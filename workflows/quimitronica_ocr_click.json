@@ -1,5 +1,5 @@
 {
-  "name": "RPA - Quimitronica (Browser + Wait + OCR Click with A* Spline)",
+  "name": "RPA - Quimitronica (Browser + Wait + OCR Click with Smooth A* Spline)",
   "nodes": [
     {
       "parameters": {},
@@ -33,7 +33,7 @@
     },
     {
       "parameters": {
-        "command": "python \"C:\\Users\\Juan Diego\\Desktop\\Antigravity\\Antigravity-workflow-assistant\\scripts\\ocr_vision\\click_image_ocr.py\" --text \"productos\" --spline-points 60 --step-delay 0.008 --no-failsafe"
+        "command": "python \"C:\\Users\\Juan Diego\\Desktop\\Antigravity\\Antigravity-workflow-assistant\\scripts\\ocr_vision\\click_image_ocr.py\" --text \"productos\" --duration 1.2 --fps 120 --no-failsafe"
       },
       "id": "4",
       "name": "3. OCR Click Spline A* 'Productos'",
