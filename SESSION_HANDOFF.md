@@ -1,7 +1,7 @@
 # SESSION HANDOFF: Antigravity Workflow Assistant (RPA con n8n)
 
-**Última actualización:** 2026-10-25 23:05:00
-**Estado actual:** Sesión guardada. Entorno base, utilitarios de ratón/teclado, script de lanzamiento n8n y dependencias completamente listos.
+**Última actualización:** 2026-10-25 23:24:00
+**Estado actual:** Sesión guardada. Implementación completa de OCR nativo en Windows, utilitarios de ratón/teclado, scripts de navegador y flujo de prueba n8n importable y funcional.
 
 ---
 
@@ -11,14 +11,15 @@
   - `stdout` reservado estrictamente para JSON estructurado (`status`, `data`, `error`, `metadata`).
   - `stderr` para logs y depuración usando `logging` para evitar romper el parsing de n8n.
 - **Estructura Modular por Categorías:**
-  - `scripts/browser/`: Navegación web y scraping.
-  - `scripts/ocr_vision/`: Detección visual y OCR.
+  - `scripts/browser/`: Navegación web (Playwright, Selenium, browser de sistema).
+  - `scripts/ocr_vision/`: Detección visual y OCR (Windows Native OCR / `winocr` + PyAutoGUI).
   - `scripts/keyboard_mouse/`: Interacción de periféricos en el sistema.
   - `scripts/routines/`: Tareas compuestas.
-- **Estandarización Persistente para LMs:**
-  - Regla persistente en `.gemini/rules/rpa-standards.md` para garantizar el mismo patrón de docstrings e I/O en chats futuros.
+  - `workflows/`: Flujos JSON exportables para n8n.
+- **Motor OCR Elegido:**
+  - Uso de la API nativa de Windows OCR mediante `winocr` (sin requerir binarios externos de Tesseract instalados en el sistema operativo).
 - **Seguridad y Permisos en n8n:**
-  - Desbloqueo de nodos y acceso a disco configurado en `start_n8n.bat` (`NODES_EXCLUDE=[]`, `N8N_RESTRICT_FILE_ACCESS_TO="C:\Users\Juan Diego\Desktop"`).
+  - Desbloqueo de nodos y acceso a disco configurado en `start_n8n.bat` (`NODES_EXCLUDE=[]`, `N8N_RESTRICT_FILE_ACCESS_TO="C:\Users\Juan Diego\Desktop"`, `NODE_FUNCTION_ALLOW_EXTERNAL=*`, `NODE_FUNCTION_ALLOW_BUILTIN=*`, `N8N_BLOCK_ENV_ACCESS_IN_NODE=false`).
 
 ---
 
@@ -27,23 +28,26 @@
 - [x] **`docs/USER_GUIDE.md`**: Manual de usuario con instrucciones de ejecución en n8n y protocolo de handoff.
 - [x] **`.gemini/rules/rpa-standards.md`**: Regla de consistencia para el modelo de lenguaje.
 - [x] **`templates/script_template.py`**: Boilerplate estandarizado para nuevas tareas RPA.
-- [x] **`scripts/browser/open_url.py`**: Tarea de navegación web.
-- [x] **`scripts/ocr_vision/click_image_ocr.py`**: Tarea de clics basados en plantilla/OCR.
+- [x] **`scripts/browser/open_url.py`**: Tarea de navegación web estructurada.
+- [x] **`scripts/browser/open_system_browser.py`**: Abre el navegador del sistema y lo mantiene en pantalla para interacción visual con OCR.
+- [x] **`scripts/browser/navigate_and_click.py`**: Automatización Playwright (navegación + espera + clic en texto del DOM).
+- [x] **`scripts/ocr_vision/click_image_ocr.py`**: Localiza texto en la pantalla en tiempo real mediante OCR nativo de Windows (`winocr`) y ejecuta un clic físico en las coordenadas detectadas.
 - [x] **`scripts/keyboard_mouse/mouse_action.py`**: Acciones de ratón (`move`, `click`, `double_click`, `right_click`, `drag`, `scroll`) con bandera `--no-failsafe`.
 - [x] **`scripts/keyboard_mouse/keyboard_action.py`**: Acciones de teclado (`typewrite`, `press`, `hotkey` combinados) con bandera `--no-failsafe`.
-- [x] **`requirements.txt`**: Dependencias agrupadas (PyAutoGUI, OpenCV, PyTesseract, Pillow, Playwright, Selenium, BeautifulSoup4, Requests).
+- [x] **`requirements.txt`**: Dependencias base (PyAutoGUI, OpenCV, PyTesseract, Pillow, WinOCR, Playwright, Selenium, BeautifulSoup4, Requests).
 - [x] **`start_n8n.bat`**: Lanzador para Windows con permisos completos para `Execute Command` y acceso a rutas locales.
-- [x] Estructura de carpetas modular (`browser`, `ocr_vision`, `keyboard_mouse`, `routines`).
+- [x] **`workflows/quimitronica_ocr_click.json`**: Flujo para n8n con la secuencia: (1) Abrir navegador -> (2) Esperar 5s -> (3) OCR Click en "productos" -> (4) Parseo JSON.
+- [x] Estructura de carpetas modular (`browser`, `ocr_vision`, `keyboard_mouse`, `routines`, `workflows`).
 
 ---
 
 ## 3. Features Pendientes (Backlog)
 - [ ] Implementar script de web scraping (`scripts/browser/web_scraping.py`).
-- [ ] Conectar librerías de visión en tiempo real (Tesseract / OpenCV template matching).
-- [ ] Exportar plantilla de workflow de ejemplo en `.json` para importar en n8n.
+- [ ] Implementar búsqueda por plantilla de imagen OpenCV (`template matching`) como complemento al OCR.
+- [ ] Agregar manejo de múltiples monitores para la captura de pantalla de OCR.
 
 ---
 
 ## 4. Riesgos y Consideraciones
-- **Fail-safe de PyAutoGUI:** Si el puntero se mueve a una esquina (coordenadas 0,0), PyAutoGUI lanza una excepción por seguridad a menos que se use la opción `--no-failsafe`.
-- **Ejecución en Windows vs Linux/Docker:** Si n8n se migra a Docker, PyAutoGUI requerirá un servidor X virtual (`Xvfb`) para interactuar con la pantalla.
+- **Resolución y Escalado de Pantalla (DPI):** En Windows con escalado al 125% o 150%, las coordenadas devueltas por OCR y las requeridas por PyAutoGUI pueden requerir factor de escala si no coinciden los píxeles lógicos con los físicos.
+- **Fail-safe de PyAutoGUI:** Siempre mantener el argumento `--no-failsafe` si las coordenadas o el mouse están en la esquina (0,0).

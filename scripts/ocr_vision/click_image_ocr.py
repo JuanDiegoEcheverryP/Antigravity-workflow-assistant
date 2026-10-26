@@ -3,31 +3,49 @@
 RPA_TASK: Click Image OCR
 CATEGORY: ocr_vision
 DESCRIPTION:
-    Captura la pantalla o una región específica, busca un texto mediante OCR
-    o localiza una plantilla de imagen y simula un clic en las coordenadas coincidentes.
+    Captura la pantalla completa o una ventana activa, ejecuta OCR (utilizando la API nativa de Windows
+    o Tesseract) para localizar un texto específico, y realiza un clic sobre las coordenadas del texto detectado.
 
 INPUTS:
-    - --text (str, opcional): Texto objetivo a localizar con OCR.
-    - --template-path (str, opcional): Ruta a la imagen de referencia para coincidencia visual.
-    - --confidence (float, opcional): Nivel de coincidencia requerido entre 0.1 y 1.0 (default: 0.8).
-    - --json-input (str, opcional): Parámetros en JSON.
+    - --text (str, obligatorio): Palabra o frase a buscar en pantalla (ej. 'productos').
+    - --lang (str, opcional): Idioma para OCR (default: 'en-US').
+    - --clicks (int, opcional): Número de clics a realizar (default: 1).
+    - --no-failsafe (bool, opcional): Desactiva fail-safe de esquinas en pyautogui (default: False).
+    - --json-input (str, opcional): Payload JSON con parámetros.
 
 OUTPUTS:
-    - found (bool): Si el elemento fue localizado y clickeado.
-    - coordinates (dict): Coordenadas {x, y} donde se ejecutó el clic.
-    - confidence (float): Grado de confianza detectado.
+    - found (bool): Indica si el texto fue encontrado y clickeado.
+    - matched_text (str): Texto exacto reconocido por el motor OCR.
+    - coordinates (dict): Coordenadas {x, y} en pantalla donde se ejecutó el clic.
+    - bbox (dict): Caja delimitadora {x, y, width, height} del elemento reconocido.
 
 EXIT CODES:
-    - 0: Clic realizado exitosamente.
-    - 1: No se encontró la coincidencia o falló el clic.
+    - 0: Clic por OCR ejecutado con éxito.
+    - 1: No se localizó el texto en pantalla o falló el reconocimiento.
 """
 
 import sys
 import json
 import time
+import asyncio
 import argparse
 import logging
 from typing import Dict, Any
+
+try:
+    import pyautogui
+except ImportError:
+    pyautogui = None
+
+try:
+    from PIL import ImageGrab
+except ImportError:
+    ImageGrab = None
+
+try:
+    import winocr
+except ImportError:
+    winocr = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,36 +55,91 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+async def find_text_coordinates_windows_ocr(screenshot, target_text: str, lang: str):
+    """
+    Busca coordenadas de texto en la imagen usando la API nativa de Windows OCR.
+    """
+    if winocr is None:
+        raise RuntimeError("El módulo 'winocr' no está instalado.")
+
+    result = await winocr.recognize_pil(screenshot, lang)
+    clean_target = target_text.strip().lower()
+
+    # Buscar coincidencia exacta o contenida en cada palabra o línea
+    for line in result.lines:
+        line_text = line.text.lower()
+        if clean_target in line_text:
+            # Buscar la palabra específica si está disponible
+            for word in line.words:
+                if clean_target in word.text.lower():
+                    rect = word.bounding_rect
+                    center_x = int(rect.x + (rect.width / 2))
+                    center_y = int(rect.y + (rect.height / 2))
+                    return {
+                        "found": True,
+                        "matched_text": word.text,
+                        "center": {"x": center_x, "y": center_y},
+                        "bbox": {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                    }
+            # Si no coincide la palabra suelta pero sí la línea:
+            for word in line.words:
+                rect = word.bounding_rect
+                center_x = int(rect.x + (rect.width / 2))
+                center_y = int(rect.y + (rect.height / 2))
+                return {
+                    "found": True,
+                    "matched_text": line.text,
+                    "center": {"x": center_x, "y": center_y},
+                    "bbox": {"x": rect.x, "y": rect.y, "width": rect.width, "height": rect.height}
+                }
+
+    return {"found": False}
+
+
 def execute_task(params: Dict[str, Any]) -> Dict[str, Any]:
-    text = params.get("text")
-    template_path = params.get("template_path")
-    confidence = float(params.get("confidence", 0.8))
+    if pyautogui is None or ImageGrab is None:
+        raise RuntimeError("Se requieren 'pyautogui' y 'Pillow' para captura y clics.")
 
-    if not text and not template_path:
-        raise ValueError("Se debe especificar al menos '--text' (para OCR) o '--template-path' (para imagen).")
+    target_text = params.get("text")
+    lang = params.get("lang", "en-US")
+    clicks = int(params.get("clicks", 1))
+    no_failsafe = bool(params.get("no_failsafe", False))
 
-    logger.info(f"Buscando objetivo: text='{text}', template='{template_path}' con confianza {confidence}...")
+    if not target_text:
+        raise ValueError("El parámetro '--text' es obligatorio para la búsqueda OCR.")
 
-    # Lógica de detección (ej. PyAutoGUI / Tesseract / OpenCV)
-    # Ejemplo simulado de detección exitosa:
-    found_coords = {"x": 450, "y": 320}
-    logger.info(f"Objetivo localizado en {found_coords}. Simulando clic...")
+    pyautogui.FAILSAFE = not no_failsafe
+
+    logger.info(f"Tomando captura de pantalla completa para OCR...")
+    screenshot = ImageGrab.grab()
+
+    logger.info(f"Ejecutando OCR buscando el texto: '{target_text}' (idioma: {lang})...")
+    ocr_result = asyncio.run(find_text_coordinates_windows_ocr(screenshot, target_text, lang))
+
+    if not ocr_result.get("found"):
+        raise RuntimeError(f"No se encontró el texto '{target_text}' en pantalla mediante OCR.")
+
+    click_coords = ocr_result["center"]
+    logger.info(f"Texto detectado ('{ocr_result['matched_text']}') en {click_coords}. Ejecutando clic...")
+    pyautogui.click(x=click_coords["x"], y=click_coords["y"], clicks=clicks)
 
     return {
         "found": True,
-        "coordinates": found_coords,
-        "confidence": confidence,
-        "message": "Coincidencia encontrada y clic simulado con éxito"
+        "matched_text": ocr_result["matched_text"],
+        "coordinates": click_coords,
+        "bbox": ocr_result["bbox"],
+        "message": f"Texto localizado por OCR y clickeado en ({click_coords['x']}, {click_coords['y']})"
     }
 
 
 def main():
     start_time = time.time()
-    parser = argparse.ArgumentParser(description="Realiza clic basado en imagen u OCR.")
-    parser.add_argument("--text", type=str, help="Texto a buscar con OCR", default=None)
-    parser.add_argument("--template-path", type=str, help="Ruta de imagen de plantilla", default=None)
-    parser.add_argument("--confidence", type=float, help="Confianza (0.1 - 1.0)", default=0.8)
-    parser.add_argument("--json-input", type=str, help="Payload JSON", default=None)
+    parser = argparse.ArgumentParser(description="Busca un texto en pantalla por OCR y hace clic.")
+    parser.add_argument("--text", type=str, required=False, help="Texto a buscar")
+    parser.add_argument("--lang", type=str, default="en-US", help="Idioma OCR (default: en-US)")
+    parser.add_argument("--clicks", type=int, default=1, help="Número de clics")
+    parser.add_argument("--no-failsafe", action="store_true", help="Desactiva failsafe en esquinas de pantalla")
+    parser.add_argument("--json-input", type=str, default=None, help="Payload JSON con parámetros")
 
     args = parser.parse_args()
 
@@ -101,7 +174,7 @@ def main():
         print(json.dumps(response, ensure_ascii=False))
         sys.exit(0)
     except Exception as e:
-        logger.exception("Fallo en búsqueda o clic OCR")
+        logger.exception("Error ejecutando clic por OCR")
         response = {
             "status": "error",
             "data": {},
