@@ -31,12 +31,12 @@
 - [x] **`scripts/browser/open_url.py`**: Tarea de navegación web estructurada.
 - [x] **`scripts/browser/open_system_browser.py`**: Abre el navegador del sistema y lo mantiene en pantalla para interacción visual con OCR.
 - [x] **`scripts/browser/navigate_and_click.py`**: Automatización Playwright (navegación + espera + clic en texto del DOM).
-- [x] **`scripts/ocr_vision/click_image_ocr.py`**: Localiza texto en la pantalla en tiempo real mediante OCR nativo de Windows (`winocr`) y ejecuta un clic físico en las coordenadas detectadas.
+- [x] **`scripts/ocr_vision/click_image_ocr.py`**: Localiza texto en pantalla con Windows OCR (`winocr`), construye un mapa de pesos por píxel, calcula la trayectoria óptima con el algoritmo A* desde la posición actual del mouse hasta el destino y desplaza el cursor suavemente antes de cliquear.
 - [x] **`scripts/keyboard_mouse/mouse_action.py`**: Acciones de ratón (`move`, `click`, `double_click`, `right_click`, `drag`, `scroll`) con bandera `--no-failsafe`.
 - [x] **`scripts/keyboard_mouse/keyboard_action.py`**: Acciones de teclado (`typewrite`, `press`, `hotkey` combinados) con bandera `--no-failsafe`.
-- [x] **`requirements.txt`**: Dependencias base (PyAutoGUI, OpenCV, PyTesseract, Pillow, WinOCR, Playwright, Selenium, BeautifulSoup4, Requests).
+- [x] **`requirements.txt`**: Dependencias base (PyAutoGUI, OpenCV, PyTesseract, Pillow, WinOCR, NumPy, Playwright, Selenium, BeautifulSoup4, Requests).
 - [x] **`start_n8n.bat`**: Lanzador para Windows con permisos completos para `Execute Command` y acceso a rutas locales.
-- [x] **`workflows/quimitronica_ocr_click.json`**: Flujo para n8n con la secuencia: (1) Abrir navegador -> (2) Esperar 5s -> (3) OCR Click en "productos" -> (4) Parseo JSON.
+- [x] **`workflows/quimitronica_ocr_click.json`**: Flujo para n8n con la secuencia: (1) Abrir navegador -> (2) Esperar 5s -> (3) OCR Click en "productos" con trayectoria A* -> (4) Parseo JSON.
 - [x] Estructura de carpetas modular (`browser`, `ocr_vision`, `keyboard_mouse`, `routines`, `workflows`).
 
 ---
