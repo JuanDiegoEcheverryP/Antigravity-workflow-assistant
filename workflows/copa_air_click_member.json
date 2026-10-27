@@ -1,0 +1,61 @@
+{
+  "name": "RPA - Copa Airlines (Navigate + Wait 5s + Click Member Button)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "command": "python \"C:\\Users\\Juan Diego\\Desktop\\Antigravity\\Antigravity-workflow-assistant\\scripts\\browser\\click_by_selector.py\" --url \"https://www.copaair.com/es-gs/\" --wait-seconds 5 --selector \"button:has(svg[data-testid='PermIdentityIcon'])\" --aria-label \"Has iniciado sesión\""
+      },
+      "id": "2",
+      "name": "1. Copa Air: Wait 5s & Click Member Icon",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const rawOutput = $json.stdout;\ntry {\n  const parsed = JSON.parse(rawOutput);\n  return [{ json: parsed }];\n} catch (e) {\n  return [{ json: { error: 'Error parseando JSON de respuesta', raw: rawOutput } }];\n}"
+      },
+      "id": "3",
+      "name": "2. Parse Resultado Copa",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "1. Copa Air: Wait 5s & Click Member Icon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1. Copa Air: Wait 5s & Click Member Icon": {
+      "main": [
+        [
+          {
+            "node": "2. Parse Resultado Copa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
